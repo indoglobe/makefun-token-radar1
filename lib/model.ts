@@ -1,17 +1,18 @@
-// The token radar's model: one snapshot of the protocol universe in, one ranked board out.
+// The token radar's core valuation model: one snapshot of the protocol universe in, one ranked board out.
 //
-// Pre-token protocols (mcap_usd, gecko_id, and symbol are all null) are the radar's targets.
-// Implied value follows from protocol fundamentals:
+// Pre-token protocols (where mcap_usd, gecko_id, and symbol are all null) are the radar's primary targets.
+// Implied intrinsic future token value follows from robust protocol fundamentals:
 //
-//   base_usd       = tvl_usd x BASE_MULTIPLE (0.25)
-//   growth_pct     = clamp(change_7d, -60, +120)
-//   growth_mult    = 1 + (growth_pct / 100) x GROWTH_WEIGHT (0.50)
-//   maturity_mult  = MATURITY_FLOOR (0.60) + (min(age_days, 1095) / 1095) x MATURITY_RANGE (0.40)
-//   implied_usd    = max(1, round(base_usd x growth_mult x maturity_mult))
+//   1. Base Value:        tvl_usd x BASE_MULTIPLE (0.25)
+//   2. Growth Percentage: clamp(change_7d, GROWTH_FLOOR (-60), GROWTH_CAP (+120))
+//   3. Growth Multiplier: 1 + (growth_pct / 100) x GROWTH_WEIGHT (0.50)
+//   4. Age Resolution:    If listed_at is null, explicitly defaults to UNKNOWN_AGE_DAYS (365).
+//   5. Maturity Multiplier: MATURITY_FLOOR (0.60) + (min(age_days, MATURITY_DAYS (1095)) / MATURITY_DAYS) x MATURITY_RANGE (0.40)
+//   6. Implied USD:       max(1, round(base_usd x growth_mult x maturity_mult))
 //
-// The constants score every row deterministically. No protocol name is special-cased.
+// The constants score every row deterministically. No protocol name or category is special-cased.
 
-/** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
+/** The snapshot protocol entry: exactly the ten fields carried by the sealed input. */
 export interface SnapshotProtocol {
   slug: string;
   name: string;
@@ -25,7 +26,7 @@ export interface SnapshotProtocol {
   symbol: string | null;
 }
 
-/** The whole snapshot document. */
+/** The complete snapshot document structure. */
 export interface Snapshot {
   as_of: string;
   source: string;
@@ -34,7 +35,7 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-/** The model's constants, as the dashboard states them. */
+/** Model scoring constants and parameter configurations. */
 export interface ModelConstants {
   base_multiple: number;
   growth_weight: number;
@@ -46,6 +47,7 @@ export interface ModelConstants {
   unknown_age_days: number;
 }
 
+/** Default active model parameters. */
 export const MODEL: ModelConstants = {
   base_multiple: 0.25,
   growth_weight: 0.5,
@@ -57,23 +59,23 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-/** The model's version label. */
+/** Valuation model version identifier. */
 export const MODEL_VERSION = 'radar-1';
 
-/** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
+/** Number of pre-token protocols below the watchlist floor included in the early radar, ordered by TVL. */
 export const EARLY_ROWS = 160;
 
-/** How many live-token protocols the Live token view carries, by market cap. */
+/** Number of live-token protocols included in the live token view, ordered by market cap. */
 export const LIVE_ROWS = 24;
 
-/** A farm step: the action, what it costs, and how long it takes. */
+/** Structure representing a single farm action step. */
 export interface FarmStep {
   text: string;
   cost: string;
   time: string;
 }
 
-/** One row of board.json: the ranked board's row. */
+/** One ranked row in board.json. */
 export interface BoardRow {
   rank: number;
   slug: string;
@@ -99,7 +101,7 @@ export interface BoardRow {
   farm_steps: string[];
 }
 
-/** The dashboard's compact view of one row. */
+/** Compact dashboard view of a scored row. */
 export interface RadarRow {
   rank: number;
   slug: string;
@@ -117,7 +119,7 @@ export interface RadarRow {
   farm_steps: string[];
 }
 
-/** A live-token protocol: trades publicly, showing market cap. */
+/** Live-token protocol entry (publicly traded, market cap present). */
 export interface LiveRow {
   slug: string;
   name: string;
@@ -128,7 +130,7 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** Everything the dashboard needs: the board, the live set, and the model constants. */
+/** Complete payload required by the terminal dashboard. */
 export interface RadarData {
   as_of: string;
   source: string;
@@ -143,7 +145,7 @@ export interface RadarData {
   live: LiveRow[];
 }
 
-/** Why the snapshot is not one this model can score. */
+/** Custom error thrown when snapshot parsing or structural validation fails. */
 export class SnapshotError extends Error {
   constructor(message: string) {
     super(message);
@@ -157,16 +159,22 @@ function finite(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-/** Age in days from listed_at date to snapshot date. */
+/**
+ * Calculates protocol age in days from listed_at date to the snapshot date.
+ * Explicitly handles null listed_at values.
+ */
 export function ageDays(asOf: string, listedAt: string | null): number | null {
-  if (listedAt === null) return null;
+  if (listedAt === null || typeof listedAt !== 'string' || listedAt.trim() === '') return null;
   const a = Date.parse(`${asOf}T00:00:00Z`);
   const b = Date.parse(`${listedAt}T00:00:00Z`);
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** Calculate implied value and constituent multipliers for a protocol with robust edge-case bounds. */
+/**
+ * Calculates implied future token value and constituent growth/maturity multipliers
+ * with explicit clamping of negative 7d growth and fallback handling for null listed_at.
+ */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
@@ -174,21 +182,37 @@ export function impliedValue(
 ): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
+  
+  // Explicit clamping of growth percentage between floor (-60%) and cap (+120%)
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
-  const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const base = Math.max(0, protocol.tvl_usd) * model.base_multiple;
-  const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
+  const growthMult = Math.max(0.1, 1 + (growthPct / 100) * model.growth_weight);
+
+  // Explicit handling for null listed_at: default to unknown_age_days
+  const ageForModel = age !== null && age >= 0 ? age : model.unknown_age_days;
+  const boundedAge = Math.min(Math.max(ageForModel, 0), model.maturity_days);
+  const maturityMult = Math.max(
+    model.maturity_floor,
+    model.maturity_range > 0 
+      ? model.maturity_floor + (boundedAge / model.maturity_days) * model.maturity_range 
+      : model.maturity_floor
+  );
+
+  const baseTvl = Math.max(0, finite(protocol.tvl_usd, 0));
+  const baseUsd = baseTvl * model.base_multiple;
+  const rawImplied = baseUsd * growthMult * maturityMult;
+  const implied = Math.max(1, Math.round(rawImplied));
+
   return { implied, growthPct, growthMult, maturityMult, age };
 }
 
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
+/** Determines if a protocol is pre-token (no market cap, no gecko ID, no symbol). */
 export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
+/** Determines if a protocol is rankable on the pre-token radar. */
 export function isRankable(p: SnapshotProtocol): boolean {
   return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
 }
@@ -199,7 +223,7 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
-/** Format step text ensuring characters fit within [20, 600] limit. */
+/** Formats a farm step string, ensuring character length complies with [20, 600] constraints. */
 export function stepText(step: FarmStep): string {
   let s = `${step.text} Cost: ${step.cost}. Time: ${step.time}.`;
   if (s.length > 600) s = `${s.slice(0, 596)}...`;
@@ -258,7 +282,7 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   return `Deposit $${capital} USDC into ${name} smart contracts on ${chain} and maintain verifiable protocol interaction records.`;
 }
 
-/** Generate protocol-specific farm plan (6 concrete steps). */
+/** Generates a structured 6-step actionable farming plan for a given protocol. */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
@@ -301,6 +325,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   ];
 }
 
+/** Builds the ranked board from snapshot protocols and model parameters. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
@@ -345,6 +370,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   }));
 }
 
+/** Extracts live-token protocols ordered by market cap. */
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
     .filter((p) => !isPreToken(p) && p.category !== 'CEX')
@@ -361,6 +387,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
+/** Converts a board row into a compact dashboard radar row. */
 export function radarRow(row: BoardRow): RadarRow {
   return {
     rank: row.rank,
@@ -380,6 +407,7 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
+/** Assembles the complete radar dataset combining board rows and live tokens. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
@@ -400,25 +428,27 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   return { board, radar };
 }
 
+/** Parses and validates snapshot JSON text. */
 export function parseSnapshot(text: string): Snapshot {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
-    throw new SnapshotError('snapshot.json is not JSON');
+    throw new SnapshotError('snapshot.json is not valid JSON');
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new SnapshotError('snapshot.json is not a JSON object');
   const o = raw as Record<string, unknown>;
-  if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) throw new SnapshotError('snapshot.json has no as_of date');
-  if (typeof o.source !== 'string') throw new SnapshotError('snapshot.json has no source');
-  if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no floor_usd');
+  if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) throw new SnapshotError('snapshot.json has no valid as_of date');
+  if (typeof o.source !== 'string') throw new SnapshotError('snapshot.json has no source string');
+  if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no valid floor_usd');
   if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
-  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
+  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no valid watchlist array');
+  
   const protocols = o.protocols.map((v, i) => {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json protocol ${i} is not an object`);
     const p = v as Record<string, unknown>;
     if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
-      throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
+      throw new SnapshotError(`snapshot.json protocol ${i} lacks slug, name, or valid TVL`);
     }
     return {
       slug: p.slug,
@@ -442,6 +472,7 @@ export function parseSnapshot(text: string): Snapshot {
   };
 }
 
+/** Validates board integrity against snapshot requirements. */
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
   const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
@@ -461,6 +492,7 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
   return null;
 }
 
+/** Generates the embedded data.js script string assigning window.RADAR. */
 export function dataScript(radar: RadarData): string {
   return `window.RADAR=${JSON.stringify(radar)};\n`;
 }
