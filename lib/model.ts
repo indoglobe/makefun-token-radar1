@@ -166,7 +166,7 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** Calculate implied value and constituent multipliers for a protocol. */
+/** Calculate implied value and constituent multipliers for a protocol with robust edge-case bounds. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
@@ -178,7 +178,7 @@ export function impliedValue(
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const base = protocol.tvl_usd * model.base_multiple;
+  const base = Math.max(0, protocol.tvl_usd) * model.base_multiple;
   const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
   return { implied, growthPct, growthMult, maturityMult, age };
 }
