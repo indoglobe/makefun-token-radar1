@@ -94,6 +94,7 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  tier: string;
   model: {
     base_multiple: number;
     growth_pct: number;
@@ -118,6 +119,7 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  tier: string;
   growth_multiplier: number;
   maturity_multiplier: number;
   volatility_multiplier: number;
@@ -234,6 +236,13 @@ export function impliedValue(
 }
 
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
+
+/** Returns the tier string for a board row (top-1, top-10, or rest). */
+export function rankLabel(score: number): string {
+  if (score === 1) return 'top-1';
+  if (score <= 10) return 'top-10';
+  return 'rest';
+}
 
 /** Determines if a protocol is pre-token (no market cap, no gecko ID, no symbol). */
 export function isPreToken(p: SnapshotProtocol): boolean {
@@ -373,31 +382,35 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     return { p, implied, growthPct, growthMult, maturityMult, volatilityMult, age };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  return scored.map((s, i) => ({
-    rank: i + 1,
-    slug: s.p.slug,
-    name: s.p.name,
-    category: s.p.category,
-    chains: s.p.chains,
-    tvl_usd: s.p.tvl_usd,
-    change_7d: s.p.change_7d,
-    mcap_usd: s.p.mcap_usd,
-    listed_at: s.p.listed_at,
-    gecko_id: s.p.gecko_id,
-    symbol: s.p.symbol,
-    token_status: 'pre-token',
-    age_days: s.age,
-    implied_value_usd: s.implied,
-    model: {
-      base_multiple: model.base_multiple,
-      growth_pct: s.growthPct,
-      growth_multiplier: round4(s.growthMult),
-      maturity_multiplier: round4(s.maturityMult),
-      volatility_multiplier: round4(s.volatilityMult),
+  return scored.map((s, i) => {
+    const rank = i + 1;
+    return {
+      rank,
+      slug: s.p.slug,
+      name: s.p.name,
+      category: s.p.category,
+      chains: s.p.chains,
+      tvl_usd: s.p.tvl_usd,
+      change_7d: s.p.change_7d,
+      mcap_usd: s.p.mcap_usd,
+      listed_at: s.p.listed_at,
+      gecko_id: s.p.gecko_id,
+      symbol: s.p.symbol,
+      token_status: 'pre-token',
       age_days: s.age,
-    },
-    farm_steps: farmSteps(s.p, s.age).map(stepText),
-  }));
+      implied_value_usd: s.implied,
+      tier: rankLabel(rank),
+      model: {
+        base_multiple: model.base_multiple,
+        growth_pct: s.growthPct,
+        growth_multiplier: round4(s.growthMult),
+        maturity_multiplier: round4(s.maturityMult),
+        volatility_multiplier: round4(s.volatilityMult),
+        age_days: s.age,
+      },
+      farm_steps: farmSteps(s.p, s.age).map(stepText),
+    };
+  });
 }
 
 /** Extracts live-token protocols ordered by market cap. */
@@ -431,6 +444,7 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    tier: row.tier ?? rankLabel(row.rank),
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     volatility_multiplier: row.model.volatility_multiplier,

@@ -236,18 +236,25 @@
   }
 
   function renderSortHeader(key, label) {
+    var handleSort = function () {
+      if (state.sort === key) {
+        state.dir = -state.dir;
+      } else {
+        state.sort = key;
+        state.dir = -1;
+      }
+      render();
+    };
     return el('th', { scope: 'col' },
       el('button', {
         type: 'button',
         class: 'sort-btn',
-        onclick: function () {
-          if (state.sort === key) {
-            state.dir = -state.dir;
-          } else {
-            state.sort = key;
-            state.dir = -1;
+        onclick: handleSort,
+        onkeydown: function (e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleSort();
           }
-          render();
         }
       },
         label,
@@ -331,7 +338,12 @@
             el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
           )
         ),
-        el('td', null, el('span', { class: 'badge', text: 'pre-token' })),
+        el('td', null,
+          el('div', { style: 'display:flex; gap:4px; align-items:center;' },
+            el('span', { class: 'badge', text: r.tier || (r.rank === 1 ? 'top-1' : r.rank <= 10 ? 'top-10' : 'rest') }),
+            el('span', { class: 'badge', text: 'pre-token' })
+          )
+        ),
         el('td', null, el('div', { class: 'farm-snippet', title: firstStep, text: firstStep }))
       );
       tbody.appendChild(tr);
