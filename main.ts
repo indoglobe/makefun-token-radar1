@@ -21,7 +21,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot, MODEL } from './lib/model.ts';
+import { boardIssue, buildRadar, dataScript, parseSnapshot, MODEL, volatilityProxy } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -47,6 +47,7 @@ const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 const activeModel = MODEL;
+const universeVol = volatilityProxy(snapshot.protocols);
 const { board, radar } = buildRadar(snapshot, activeModel);
 const issue = boardIssue(board, snapshot);
 if (issue !== null) {
@@ -98,6 +99,7 @@ process.stdout.write(
   `• Universe Metrics: ${snapshot.protocols.length} total protocols | ${snapshot.watchlist.length} watchlist items\n` +
   `• Scored Board:     ${board.length} rows (${radar.early_size} early-stage protocols, ${radar.live_size} live tokens set aside)\n` +
   `• Model Parameters: base_multiple=${activeModel.base_multiple}, growth_weight=${activeModel.growth_weight}, growth_cap=${activeModel.growth_cap}%, growth_floor=${activeModel.growth_floor}%, maturity_floor=${activeModel.maturity_floor}\n` +
+  `• Volatility Proxy: std_dev=${universeVol.stdDev}% dispersion factor (weight=${activeModel.volatility_weight}, mean_change=${universeVol.meanChange}%)\n` +
   `• Output Artifacts: ${join(out, 'board.json')}, ${join(out, 'data.js')}, dashboard/ (3 files), screenshots/ (${shots.length} images), dossier.json\n` +
   `============================================================\n` +
   `SUCCESS: Token Radar execution completed successfully.\n`

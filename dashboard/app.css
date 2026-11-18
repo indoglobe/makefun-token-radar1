@@ -289,6 +289,15 @@ body {
   background: var(--accent-glow);
 }
 
+.radar-tbody tr.keyboard-focused {
+  background: var(--surface-hover) !important;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.radar-tbody tr:focus {
+  outline: none;
+}
+
 .num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -418,6 +427,118 @@ body {
 
 .btn:hover { border-color: var(--accent); }
 
+/* Compare Mode Banner */
+.compare-banner {
+  background: var(--surface-card);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  padding: 14px 20px;
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 0 20px var(--accent-glow);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.compare-banner span {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.compare-banner-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.compare-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Compare Modal */
+.compare-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(900px, 95vw);
+  max-height: 90vh;
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.9);
+  padding: 28px;
+  overflow-y: auto;
+  z-index: 20000;
+}
+
+.compare-modal[hidden] {
+  display: none;
+}
+
+.compare-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.compare-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-modal-header h3 {
+  font-size: 16px;
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.compare-col {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.compare-col-header {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-col-header h4 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.compare-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.compare-metric span { color: var(--text-muted); }
+.compare-metric b { color: var(--text); }
+
 /* Detail Drawer / Modal */
 .detail-drawer {
   position: fixed;
@@ -483,6 +604,26 @@ body {
 
 .math-factor-row span { color: var(--text-muted); }
 .math-factor-row b { color: var(--text); }
+
+/* Chains Breakdown Chips */
+.chains-chips-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chain-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
 
 .farm-steps-list {
   list-style: none;

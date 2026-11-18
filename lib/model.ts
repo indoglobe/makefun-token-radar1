@@ -3,12 +3,13 @@
 // Pre-token protocols (where mcap_usd, gecko_id, and symbol are all null) are the radar's primary targets.
 // Implied intrinsic future token value follows from robust protocol fundamentals:
 //
-//   1. Base Value:        tvl_usd x BASE_MULTIPLE (0.25)
-//   2. Growth Percentage: clamp(change_7d, GROWTH_FLOOR (-60), GROWTH_CAP (+120))
-//   3. Growth Multiplier: 1 + (growth_pct / 100) x GROWTH_WEIGHT (0.50)
-//   4. Age Resolution:    If listed_at is null, explicitly defaults to UNKNOWN_AGE_DAYS (365).
+//   1. Base Value:          tvl_usd x BASE_MULTIPLE (0.25)
+//   2. Growth Percentage:   clamp(change_7d, GROWTH_FLOOR (-60), GROWTH_CAP (+120))
+//   3. Growth Multiplier:   1 + (growth_pct / 100) x GROWTH_WEIGHT (0.50)
+//   4. Age Resolution:      If listed_at is null, explicitly defaults to UNKNOWN_AGE_DAYS (365).
 //   5. Maturity Multiplier: MATURITY_FLOOR (0.60) + (min(age_days, MATURITY_DAYS (1095)) / MATURITY_DAYS) x MATURITY_RANGE (0.40)
-//   6. Implied USD:       max(1, round(base_usd x growth_mult x maturity_mult))
+//   6. Volatility Proxy:    Universe change_7d standard deviation dispersion factor scaled by volatility_weight (0.05).
+//   7. Implied USD:         max(1, round(base_usd x growth_mult x maturity_mult x volatility_mult))
 //
 // The constants score every row deterministically. No protocol name or category is special-cased.
 
@@ -45,6 +46,7 @@ export interface ModelConstants {
   maturity_range: number;
   maturity_days: number;
   unknown_age_days: number;
+  volatility_weight: number;
 }
 
 /** Default active model parameters. */
@@ -57,6 +59,7 @@ export const MODEL: ModelConstants = {
   maturity_range: 0.4,
   maturity_days: 1095,
   unknown_age_days: 365,
+  volatility_weight: 0.05,
 };
 
 /** Valuation model version identifier. */
@@ -96,6 +99,7 @@ export interface BoardRow {
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
+    volatility_multiplier: number;
     age_days: number | null;
   };
   farm_steps: string[];
@@ -116,6 +120,7 @@ export interface RadarRow {
   implied_value_usd: number;
   growth_multiplier: number;
   maturity_multiplier: number;
+  volatility_multiplier: number;
   farm_steps: string[];
 }
 
@@ -141,6 +146,7 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  volatility_std_dev: number;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -172,14 +178,31 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 }
 
 /**
- * Calculates implied future token value and constituent growth/maturity multipliers
+ * Calculates volatility proxy (standard deviation and dispersion of change_7d across all protocols).
+ * Explicitly handles null/edge cases for change_7d distribution.
+ */
+export function volatilityProxy(protocols: SnapshotProtocol[]): { stdDev: number; meanChange: number } {
+  const changes = protocols
+    .map(p => p.change_7d)
+    .filter((v): v is number => v !== null && Number.isFinite(v));
+  if (changes.length === 0) return { stdDev: 0, meanChange: 0 };
+  const sum = changes.reduce((acc, val) => acc + val, 0);
+  const meanChange = sum / changes.length;
+  const variance = changes.reduce((acc, val) => acc + Math.pow(val - meanChange, 2), 0) / changes.length;
+  const stdDev = Math.sqrt(variance);
+  return { stdDev: round4(stdDev), meanChange: round4(meanChange) };
+}
+
+/**
+ * Calculates implied future token value and constituent growth, maturity, and volatility multipliers
  * with explicit clamping of negative 7d growth and fallback handling for null listed_at.
  */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   model: ModelConstants,
-): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
+  universeStdDev: number = 25.0,
+): { implied: number; growthPct: number; growthMult: number; maturityMult: number; volatilityMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   
@@ -197,12 +220,17 @@ export function impliedValue(
       : model.maturity_floor
   );
 
+  // Volatility proxy adjustment factor (bounded between 0.85 and 1.15 based on distance from mean volatility)
+  const volDeviation = Math.abs(rawGrowth);
+  const denom = universeStdDev > 0 ? universeStdDev : 30.0;
+  const volatilityMult = round4(Math.min(1.15, Math.max(0.85, 1.0 + (volDeviation / denom) * (model.volatility_weight ?? 0.05))));
+
   const baseTvl = Math.max(0, finite(protocol.tvl_usd, 0));
   const baseUsd = baseTvl * model.base_multiple;
-  const rawImplied = baseUsd * growthMult * maturityMult;
+  const rawImplied = baseUsd * growthMult * maturityMult * volatilityMult;
   const implied = Math.max(1, Math.round(rawImplied));
 
-  return { implied, growthPct, growthMult, maturityMult, age };
+  return { implied, growthPct, growthMult, maturityMult, volatilityMult, age };
 }
 
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
@@ -339,9 +367,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     .slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
 
+  const universeVol = volatilityProxy(snapshot.protocols);
   const scored = [...chosen.values()].map((p) => {
-    const { implied, growthPct, growthMult, maturityMult, age } = impliedValue(p, snapshot.as_of, model);
-    return { p, implied, growthPct, growthMult, maturityMult, age };
+    const { implied, growthPct, growthMult, maturityMult, volatilityMult, age } = impliedValue(p, snapshot.as_of, model, universeVol.stdDev);
+    return { p, implied, growthPct, growthMult, maturityMult, volatilityMult, age };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -364,6 +393,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),
+      volatility_multiplier: round4(s.volatilityMult),
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
@@ -403,12 +433,14 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
+    volatility_multiplier: row.model.volatility_multiplier,
     farm_steps: row.farm_steps,
   };
 }
 
 /** Assembles the complete radar dataset combining board rows and live tokens. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
+  const vol = volatilityProxy(snapshot.protocols);
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
@@ -422,6 +454,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_size: board.length,
     early_size: early,
     live_size: live.length,
+    volatility_std_dev: vol.stdDev,
     rows: board.map(radarRow),
     live,
   };

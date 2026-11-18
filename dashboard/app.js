@@ -12,7 +12,10 @@
     tab: 'pre-token',
     sort: 'implied',
     dir: -1,
-    selected: null
+    selected: null,
+    focusedIndex: 0,
+    compareMode: false,
+    compareSlugs: []
   };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -69,6 +72,8 @@
     if (params.get('p')) state.selected = params.get('p');
     if (params.get('category')) state.category = params.get('category');
     if (params.get('tab')) state.tab = params.get('tab');
+    if (params.get('compare')) state.compareMode = params.get('compare') === 'true';
+    if (params.get('cs')) state.compareSlugs = params.get('cs').split(',').filter(Boolean);
   }
 
   function writeHash() {
@@ -77,6 +82,8 @@
     if (state.category !== 'all') params.set('category', state.category);
     if (state.tab !== 'pre-token') params.set('tab', state.tab);
     if (state.selected) params.set('p', state.selected);
+    if (state.compareMode) params.set('compare', 'true');
+    if (state.compareSlugs.length > 0) params.set('cs', state.compareSlugs.join(','));
     var next = params.toString();
     if (next) {
       window.history.replaceState(null, '', '#' + next);
@@ -139,7 +146,7 @@
     return el('section', { class: 'hero-panel' },
       el('div', { class: 'hero-copy' },
         el('h1', { text: DATA.watchlist_size + ' Watchlist Protocols Ranked by Implied Value' }),
-        el('p', { text: 'Deterministic radar engine evaluating pre-token protocol intrinsic token value based on TVL, 7-day growth momentum, and historical age maturity. Inspect underlying math factors and farm action plans per protocol.' })
+        el('p', { text: 'Deterministic radar engine evaluating pre-token protocol intrinsic token value based on TVL, 7-day growth momentum, volatility dispersion factor, and historical age maturity. Inspect underlying math factors, chain breakdowns, and farm action plans.' })
       ),
       el('div', { class: 'hero-stats' },
         el('div', { class: 'stat-item' }, el('span', { text: 'Watchlist' }), el('b', { text: DATA.watchlist_size })),
@@ -156,12 +163,13 @@
       type: 'search',
       class: 'control-input',
       id: 'search-input',
-      placeholder: 'Search protocols, chains, categories...',
+      placeholder: 'Search protocols, chains, categories... (j/k to navigate)',
       value: state.q,
       'aria-label': 'Search protocols'
     });
     searchInput.addEventListener('input', function () {
       state.q = searchInput.value;
+      state.focusedIndex = 0;
       writeHash();
       render();
     });
@@ -178,6 +186,7 @@
     );
     categorySelect.addEventListener('change', function () {
       state.category = categorySelect.value;
+      state.focusedIndex = 0;
       writeHash();
       render();
     });
@@ -189,6 +198,7 @@
       text: 'Pre-Token Radar',
       onclick: function () {
         state.tab = 'pre-token';
+        state.focusedIndex = 0;
         writeHash();
         render();
       }
@@ -201,6 +211,19 @@
       text: 'Live Tokens',
       onclick: function () {
         state.tab = 'live';
+        state.focusedIndex = 0;
+        writeHash();
+        render();
+      }
+    });
+
+    var compareToggle = el('button', {
+      type: 'button',
+      class: 'btn ' + (state.compareMode ? 'primary' : ''),
+      text: state.compareMode ? 'Exit Compare Mode' : 'Compare Mode (' + state.compareSlugs.length + '/3)',
+      onclick: function () {
+        state.compareMode = !state.compareMode;
+        if (!state.compareMode) state.compareSlugs = [];
         writeHash();
         render();
       }
@@ -221,6 +244,10 @@
         el('label', { text: 'View Mode' }),
         el('div', { class: 'tabs-group' }, preTab, liveTab)
       ),
+      el('div', { class: 'control-group' },
+        el('label', { text: 'Analysis' }),
+        compareToggle
+      ),
       el('span', { class: 'row-count', text: countText })
     );
   }
@@ -237,6 +264,7 @@
             state.sort = key;
             state.dir = -1;
           }
+          state.focusedIndex = 0;
           render();
         }
       },
@@ -260,6 +288,7 @@
             onclick: function () {
               state.q = '';
               state.category = 'all';
+              state.focusedIndex = 0;
               writeHash();
               render();
             }
@@ -268,26 +297,59 @@
       );
     }
 
+    if (state.focusedIndex >= list.length) {
+      state.focusedIndex = Math.max(0, list.length - 1);
+    }
+
     var maxImplied = list[0].implied_value_usd || 1;
     var tbody = el('tbody', { class: 'radar-tbody' });
 
-    list.forEach(function (r) {
+    list.forEach(function (r, index) {
       var growthText = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
       var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
       var firstStep = r.farm_steps && r.farm_steps.length > 0 ? r.farm_steps[0] : 'Farm action plan ready.';
       var barWidth = Math.max(4, Math.min(100, Math.round((r.implied_value_usd / maxImplied) * 100)));
+      var isFocused = index === state.focusedIndex;
+      var isSelectedForCompare = state.compareSlugs.indexOf(r.slug) >= 0;
+
+      var checkboxCell = state.compareMode ? el('td', null,
+        el('input', {
+          type: 'checkbox',
+          class: 'compare-checkbox',
+          checked: isSelectedForCompare ? 'checked' : null,
+          onclick: function (e) {
+            e.stopPropagation();
+            toggleCompareSlug(r.slug);
+          },
+          'aria-label': 'Select ' + r.name + ' for comparison'
+        })
+      ) : null;
 
       var tr = el('tr', {
         'data-selected': state.selected === r.slug ? 'true' : 'false',
+        'data-focused': isFocused ? 'true' : 'false',
+        class: isFocused ? 'keyboard-focused' : '',
         tabindex: '0',
-        onclick: function () { openDetail(r.slug); },
+        onclick: function () {
+          state.focusedIndex = index;
+          if (state.compareMode) {
+            toggleCompareSlug(r.slug);
+          } else {
+            openDetail(r.slug);
+          }
+        },
         onkeydown: function (e) {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            openDetail(r.slug);
+            if (state.compareMode) {
+              toggleCompareSlug(r.slug);
+            } else {
+              openDetail(r.slug);
+            }
           }
         }
       },
+        checkboxCell,
         el('td', { class: 'num', text: String(r.rank) }),
         el('td', null,
           el('div', { class: 'proto-name' },
@@ -310,26 +372,52 @@
       tbody.appendChild(tr);
     });
 
-    return el('div', { class: 'table-panel' },
-      el('div', { class: 'table-scroll' },
-        el('table', { class: 'radar-table' },
-          el('caption', { class: 'visually-hidden', text: 'Pre-token protocols ranked by implied valuation' }),
-          el('thead', null,
-            el('tr', null,
-              renderSortHeader('implied', 'Rank'),
-              renderSortHeader('name', 'Protocol'),
-              renderSortHeader('tvl', 'TVL'),
-              renderSortHeader('growth', '7d Growth'),
-              renderSortHeader('age', 'Age'),
-              renderSortHeader('implied', 'Implied Value'),
-              el('th', { scope: 'col', text: 'Status' }),
-              el('th', { scope: 'col', text: 'Farm Step 1' })
-            )
-          ),
-          tbody
+    var tableHeaders = [
+      state.compareMode ? el('th', { scope: 'col', text: 'Cmp' }) : null,
+      renderSortHeader('implied', 'Rank'),
+      renderSortHeader('name', 'Protocol'),
+      renderSortHeader('tvl', 'TVL'),
+      renderSortHeader('growth', '7d Growth'),
+      renderSortHeader('age', 'Age'),
+      renderSortHeader('implied', 'Implied Value'),
+      el('th', { scope: 'col', text: 'Status' }),
+      el('th', { scope: 'col', text: 'Farm Step 1' })
+    ].filter(Boolean);
+
+    var compareBanner = state.compareMode && state.compareSlugs.length > 0 ? el('div', { class: 'compare-banner' },
+      el('span', { text: 'Comparing ' + state.compareSlugs.length + ' / 3 protocols selected.' }),
+      el('div', { class: 'compare-banner-actions' },
+        el('button', { type: 'button', class: 'btn primary', text: 'Open Side-by-Side Comparison', onclick: openCompareModal }),
+        el('button', { type: 'button', class: 'btn', text: 'Clear Selection', onclick: function () { state.compareSlugs = []; writeHash(); render(); } })
+      )
+    ) : null;
+
+    return el('div', null,
+      compareBanner,
+      el('div', { class: 'table-panel' },
+        el('div', { class: 'table-scroll' },
+          el('table', { class: 'radar-table' },
+            el('caption', { class: 'visually-hidden', text: 'Pre-token protocols ranked by implied valuation' }),
+            el('thead', null, el('tr', null, tableHeaders)),
+            tbody
+          )
         )
       )
     );
+  }
+
+  function toggleCompareSlug(slug) {
+    var idx = state.compareSlugs.indexOf(slug);
+    if (idx >= 0) {
+      state.compareSlugs.splice(idx, 1);
+    } else {
+      if (state.compareSlugs.length >= 3) {
+        state.compareSlugs.shift();
+      }
+      state.compareSlugs.push(slug);
+    }
+    writeHash();
+    render();
   }
 
   function renderLiveTable() {
@@ -377,9 +465,9 @@
     var m = DATA.model;
     return el('section', { class: 'model-doc-panel' },
       el('h2', { text: 'Valuation Model Specification (' + DATA.model_version + ')' }),
-      el('p', { class: 'proto-sub', text: 'Deterministic formula scoring every pre-token protocol across TVL, growth momentum, and age maturity.' }),
+      el('p', { class: 'proto-sub', text: 'Deterministic formula scoring every pre-token protocol across TVL, growth momentum, volatility dispersion, and age maturity.' }),
       el('div', { class: 'formula-box' },
-        'implied = round( tvl_usd x ' + m.base_multiple + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+        'implied = round( tvl_usd x ' + m.base_multiple + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x volatility_mult )'
       )
     );
   }
@@ -389,6 +477,51 @@
     state.selected = null;
     writeHash();
   });
+
+  var compareModal = el('dialog', { class: 'compare-modal', id: 'compare-modal', 'aria-labelledby': 'compare-modal-title' });
+  compareModal.addEventListener('close', function () {});
+
+  function openCompareModal() {
+    if (state.compareSlugs.length === 0) return;
+    compareModal.textContent = '';
+
+    var cols = state.compareSlugs.map(function (slug) {
+      return DATA.rows.find(function (r) { return r.slug === slug; });
+    }).filter(Boolean);
+
+    var colsContent = cols.map(function (row) {
+      return el('div', { class: 'compare-col' },
+        el('div', { class: 'compare-col-header' },
+          el('h4', { text: row.name }),
+          el('span', { class: 'proto-sub', text: 'Rank ' + row.rank + ' | ' + (row.category || 'Other') })
+        ),
+        el('div', { class: 'compare-metric' }, el('span', { text: 'Implied Value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
+        el('div', { class: 'compare-metric' }, el('span', { text: 'TVL (USD)' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
+        el('div', { class: 'compare-metric' }, el('span', { text: '7d Growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
+        el('div', { class: 'compare-metric' }, el('span', { text: 'Age' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
+        el('div', { class: 'compare-metric' }, el('span', { text: 'Growth Mult' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
+        el('div', { class: 'compare-metric' }, el('span', { text: 'Maturity Mult' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
+        el('div', { class: 'compare-metric' }, el('span', { text: 'Volatility Mult' }), el('b', { class: 'num', text: String(row.volatility_multiplier || 1.0) })),
+        el('div', { class: 'compare-metric' }, el('span', { text: 'Chains' }), el('span', { class: 'proto-sub', text: (row.chains || []).join(', ') || 'Ethereum' }))
+      );
+    });
+
+    compareModal.appendChild(
+      el('div', { class: 'compare-modal-content' },
+        el('div', { class: 'compare-modal-header' },
+          el('h3', { id: 'compare-modal-title', text: 'Protocol Side-by-Side Comparison' }),
+          el('button', { type: 'button', class: 'btn', text: 'Close [esc]', onclick: function () { compareModal.close(); } })
+        ),
+        el('div', { class: 'compare-grid' }, colsContent)
+      )
+    );
+
+    if (typeof compareModal.showModal === 'function') {
+      if (!compareModal.open) compareModal.showModal();
+    } else {
+      compareModal.setAttribute('open', '');
+    }
+  }
 
   function openDetail(slug) {
     var row = DATA.rows.find(function (r) { return r.slug === slug; });
@@ -415,6 +548,7 @@
       el('div', { class: 'math-factor-row' }, el('span', { text: 'Protocol Age' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
       el('div', { class: 'math-factor-row' }, el('span', { text: 'Growth Multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
       el('div', { class: 'math-factor-row' }, el('span', { text: 'Maturity Multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
+      el('div', { class: 'math-factor-row' }, el('span', { text: 'Volatility Multiplier' }), el('b', { class: 'num', text: String(row.volatility_multiplier || 1.0) })),
       el('div', { class: 'math-factor-row' }, el('span', { text: 'Implied Token Value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
     );
 
@@ -422,6 +556,21 @@
       el('section', { class: 'drawer-section' },
         el('h3', { text: 'Value-Math Factors' }),
         factorsBox
+      )
+    );
+
+    // Chains Breakdown panel feature requirement
+    var chainsList = row.chains && row.chains.length > 0 ? row.chains : ['Ethereum'];
+    var chainChipsContainer = el('div', { class: 'chains-chips-container' },
+      chainsList.map(function (c) {
+        return el('span', { class: 'chain-chip', text: c });
+      })
+    );
+
+    drawer.appendChild(
+      el('section', { class: 'drawer-section' },
+        el('h3', { text: 'Chains Breakdown (' + chainsList.length + ')' }),
+        chainChipsContainer
       )
     );
 
@@ -470,6 +619,9 @@
     if (!drawer.isConnected) {
       app.appendChild(drawer);
     }
+    if (!compareModal.isConnected) {
+      app.appendChild(compareModal);
+    }
     if (state.selected) {
       openDetail(state.selected);
     }
@@ -479,8 +631,34 @@
   render();
 
   window.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && drawer.open) {
-      drawer.close();
+    if (e.key === 'Escape') {
+      if (drawer.open) drawer.close();
+      if (compareModal.open) compareModal.close();
+    }
+    var tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+
+    var list = sortedRows(filteredRows());
+    if (list.length === 0) return;
+
+    if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      state.focusedIndex = Math.min(list.length - 1, state.focusedIndex + 1);
+      render();
+    } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      state.focusedIndex = Math.max(0, state.focusedIndex - 1);
+      render();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      var targetRow = list[state.focusedIndex];
+      if (targetRow) {
+        if (state.compareMode) {
+          toggleCompareSlug(targetRow.slug);
+        } else {
+          openDetail(targetRow.slug);
+        }
+      }
     }
   });
 })();
